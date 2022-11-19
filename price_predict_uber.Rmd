@@ -1,0 +1,544 @@
+---
+title: "R project"
+author: "Diana Dent"
+date: "2022-11-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# ML project in R "Uber and Lyft price prediction"
+
+## Import dataset
+### Load packages
+```{r }
+# load packages
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(car)
+library(ggthemes)
+library(lubridate)
+library(plyr)
+library(FNN)
+library(rpart)
+library(randomForest)
+library(xgboost)
+library(readr)
+library(glmnet)  
+library(mlbench)
+library(corrplot)
+library(mlbench)
+library(caret)
+library(ggcorrplot)
+
+```
+
+### Load the dataset
+```{r}
+ride <- read_csv("rideshare_kaggle.csv")
+#head(ride)
+#summary(ride)
+```
+## Data preparation
+### #Dealing with missing values
+```{r}
+anyNA(ride)
+colSums(is.na(ride))
+```
+
+```{r}
+#Dealing with missing values
+ride <- na.omit(ride)
+#re-check any missing value
+anyNA(ride)
+#summary(ride)
+```
+
+### Create/rename features - hour, weekday, product
+
+Next, we notice that the date columns contain some composite information such as day, day of the week, month, and time. Extracting them gives us more granular information to explore.
+
+```{r}
+#Add weekday column
+ride$datetime_<-as.POSIXct(ride$timestamp, tz="US/Eastern",origin="1970-01-01")
+ride$hour<-factor(hour(ride$datetime_))
+ride$weekday<-factor(weekdays(ride$datetime_))
+ride$hour <- as.numeric(ride$hour)
+#head(ride)
+```
+
+Change product names by Uber and Lyft, making them user friendly 
+ 
+```{r}
+# Rename variables by product name in a column "name"
+# For Uber
+ride$name[ride$name=="UberPool"]<-"Uber Pool"
+ride$name[ride$name=="UberX"]<-"Uber X"
+ride$name[ride$name=="UberXL"]<-"Uber XL"
+ride$name[ride$name=="WAV"]<-"Uber WAV"
+ride$name[ride$name=="Black SUV"]<-"Uber Black SUV"
+ride$name[ride$name=="Black"]<-"Uber Black"
+
+# For Lyft
+ride$name[ride$name=="Shared"]<-"Lyft Shared"
+ride$name[ride$name=="Lux Black"]<-"Lyft Lux Black"
+ride$name[ride$name=="Lux Black XL"]<-"Lyft Lux Black XL"
+ride$name[ride$name=="Lux"]<-"Lyft Lux"
+
+```
+
+
+```{r}
+#Rename a column "name" to "product"
+#unique(ride[c("name")])
+colnames(ride)[colnames(ride) == "name"] ="product"
+
+```
+
+
+### Removing Unnecessary Features
+
+We can see that 'timezone' feature has only one value. Also, 'product_id' feature contains many unidentified values. So we drop them. We remove 'id', 'datetime', 'datetime_' variables. Also, we can remove 'short summary' and 'long summary', because we leave for analyzis 'icon' predictor.
+We remove Surge multiplier feature because this predictor almost constant across samples (near-zero variance predictor).
+
+```{r}
+#colnames(ride)
+ride_ml  <- subset(ride, select = -c(1,2,6,7,11,15:17,19:21,23,26,27,29:36, 38:58))
+ride_ml <- ride_ml%>% relocate(price, .after = last_col())
+```
+
+
+```{r}
+str(ride_ml)
+```
+
+### Extract a data set for Uber price prediction
+
+```{r}
+#Create df Uber
+uber <- ride_ml[ride_ml$cab_type == 'Uber',]
+uber <- subset(uber, select = -c(6))
+str(uber)
+
+```
+
+
+```{r}
+#Create df Lyft
+#lyft <- ride_ml[ride_ml$cab_type == 'Lyft',]
+#lyft <- subset(lyft, select = -c(6))
+#str(lyft)
+#summary(lyft)
+#dim(lyft)
+```
+
+```{r}
+rm(largeObject) 
+gc() # garbage collection
+```
+
+## UBER ML price prediciton
+
+### Sample and Model
+while working with this dataset figure out that all models will work slowly because the large size of this dataset. So, we decided to extract a sample of this dataset of 2000 random rows to have a reasonable calculation time of ML models. If we increase numbers of observations for our ML models, it increases the calculation time of ML models.
+
+```{r}
+# select random 2000 rows of the dataframe "rideshare"
+#uber_sample <- sample_frac(uber,0.1)
+#glimpse(uber_sample)
+uber_sample <-sample_n(uber,2000)
+```
+
+
+### Validation Dataset
+
+```{r}
+# Split out validation data set
+# create a list of 80% of the rows in the original sample of the data set we can use for training
+set.seed(7)
+validationIndex_uber <- createDataPartition(uber_sample$price, p=0.80, list=FALSE)
+# select 20% of the data for validation
+validation_uber <- uber_sample[-validationIndex_uber,]
+# use the remaining 80% of data to training and testing the models
+dataset_uber <- uber_sample[validationIndex_uber,]
+```
+
+
+## Analyze Data
+ Descriptive Statistics
+```{r}
+# dimensions of dataset
+dim(dataset_uber)
+
+```
+ 
+```{r}
+# list types for each attribute
+sapply(dataset_uber, class)
+
+```
+We have 10 numerical and 5 categorical variables in our data set.
+
+```{r}
+# take a peek at the first 5 rows of the data
+head(dataset_uber, n=10)
+
+```
+
+```{r}
+# summarize attribute distributions
+summary(dataset_uber)
+
+```
+
+### Encoding catecorical features
+
+Bring all the categorical data to the numeric format using label encoding.
+
+```{r}
+dmy <- dummyVars(" ~ .", data = dataset_uber, fullRank = T)
+dataset_uber <- data.frame(predict(dmy, newdata = dataset_uber))
+
+glimpse(dataset_uber)
+```
+
+
+### The correlation between all attributes
+
+The correlation matrix provides us with another useful summary graphic that can help us to select features based on their respective linear correlations 
+
+```{r}
+cor(dataset_uber)
+corr_ride <- round(cor(dataset_uber), 1)
+options(repr.plot.width = 100, repr.plot.height = 100)
+ggcorrplot(corr_ride,
+           type = "lower",
+           lab = TRUE, 
+           lab_size = 1.1,  
+           colors = c("tomato2", "white", "springgreen3"),
+           title="Correlogram of Uber Dataset", 
+           ggtheme=theme_bw, tl.col="black", tl.cex=5, tl.srt=50)
+```
+
+
+
+
+```{r}
+#cor(dataset_uber[,1:48])
+#corr_ride <- round(cor(dataset_uber[,1:48]), 1)
+#options(repr.plot.width = 100, repr.plot.height = 100)
+#ggcorrplot(corr_ride,
+#           type = "lower",
+#           lab = TRUE, 
+#           lab_size = 1.1,  
+#          colors = c("tomato2", "white", "springgreen3"),
+#           title="Correlogram of Uber Dataset", 
+#           ggtheme=theme_bw, tl.col="black", tl.cex=5, tl.srt=50)
+```
+
+
+
+Unimodal Data Visualizations
+```{r}
+# histograms each attribute
+par(mar=rep(2,4))
+for(i in 1:49) {
+hist(dataset_uber[,i], main=names(dataset_uber)[i])
+}
+#dev.off()
+```
+```{r}
+# density plot for each attribute
+par(mar=rep(2,4))
+for(i in 1:49) {
+plot(density(dataset_uber[,i]), main=names(dataset_uber)[i])
+}
+
+```
+
+```{r}
+# boxplots for each attribute
+par(mar=rep(2,4))
+for(i in 1:49) {
+boxplot(dataset_uber[,i], main=names(dataset_uber)[i])
+}
+```
+
+
+### Multi modal Data Visualizations
+
+
+```{r}
+# scatterplot matrix
+pairs(dataset_uber[,1:10])
+```
+
+```{r}
+# scatterplot matrix
+pairs(dataset_uber[,11:20])
+```
+
+```{r}
+# scatterplot matrix
+pairs(dataset_uber[,21:30])
+```
+
+```{r}
+# scatterplot matrix
+pairs(dataset_uber[,31:40])
+```
+
+```{r}
+# scatterplot matrix
+pairs(dataset_uber[,41:49])
+```
+
+## Evaluate Algorithms: Baseline
+
+```{r}
+# Run algorithms using 10-fold cross validation
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "RMSE"
+```
+
+```{r}
+# LM
+set.seed(7)
+fit.lm <- train(price~., data=dataset_uber, method="lm", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+# GLM
+set.seed(7)
+fit.glm <- train(price~., data=dataset_uber, method="glm", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+# GLMNET
+set.seed(7)
+fit.glmnet <- train(price~., data=dataset_uber, method="glmnet", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# SVM
+set.seed(7)
+fit.svm <- train(price~., data=dataset_uber, method="svmRadial", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# CART
+set.seed(7)
+grid <- expand.grid(.cp=c(0, 0.05, 0.1))
+fit.cart <- train(price~., data=dataset_uber, method="rpart", metric=metric, tuneGrid=grid,
+preProc=c("center", "scale"), trControl=trainControl)
+# KNN
+set.seed(7)
+fit.knn <- train(price~., data=dataset_uber, method="knn", metric=metric, preProc=c("center",
+"scale"), trControl=trainControl)
+
+```
+
+```{r}
+# Compare algorithms
+results <- resamples(list(LM=fit.lm, GLM=fit.glm, GLMNET=fit.glmnet, SVM=fit.svm,
+CART=fit.cart, KNN=fit.knn))
+summary(results)
+dotplot(results)
+```
+
+
+## Evaluate Algorithms: Feature Selection
+
+```{r}
+# remove correlated attributes
+# find attributes that are highly corrected
+set.seed(7)
+cutoff <- 0.70
+correlations <- cor(dataset_uber[,1:48])
+highlyCorrelated <- findCorrelation(correlations, cutoff=cutoff)
+for (value in highlyCorrelated) {
+print(names(dataset_uber)[value])
+}
+str(dataset_uber)
+# create a new dataset without highly corrected features
+datasetFeatures_uber <- dataset_uber[,-highlyCorrelated]
+dim(datasetFeatures_uber)
+
+```
+
+```{r}
+str(datasetFeatures_uber)
+```
+
+
+```{r}
+# Run algorithms using 10-fold cross validation
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "RMSE"
+# lm
+set.seed(7)
+fit.lm <- train(price~., data=datasetFeatures_uber, method="lm", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# GLM
+set.seed(7)
+fit.glm <- train(price~., data=datasetFeatures_uber, method="glm", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# GLMNET
+set.seed(7)
+fit.glmnet <- train(price~., data=datasetFeatures_uber, method="glmnet", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# SVM
+set.seed(7)
+fit.svm <- train(price~., data=datasetFeatures_uber, method="svmRadial", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# CART
+set.seed(7)
+grid <- expand.grid(.cp=c(0, 0.05, 0.1))
+fit.cart <- train(price~., data=datasetFeatures_uber, method="rpart", metric=metric,
+tuneGrid=grid, preProc=c("center", "scale"), trControl=trainControl)
+# KNN
+set.seed(7)
+fit.knn <- train(price~., data=datasetFeatures_uber, method="knn", metric=metric,
+preProc=c("center", "scale"), trControl=trainControl)
+# Compare algorithms
+feature_results <- resamples(list(LM=fit.lm, GLM=fit.glm, GLMNET=fit.glmnet, SVM=fit.svm,
+CART=fit.cart, KNN=fit.knn))
+summary(feature_results)
+dotplot(feature_results)
+
+```
+
+
+## Evaluate Algorithms: Box-Cox Transform
+
+```{r}
+# Run algorithms using 10-fold cross validation
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "RMSE"
+# lm
+set.seed(7)
+fit.lm <- train(price~., data=dataset_uber, method="lm", metric=metric, preProc=c("center",
+"scale", "BoxCox"), trControl=trainControl)
+# GLM
+set.seed(7)
+fit.glm <- train(price~., data=dataset_uber, method="glm", metric=metric, preProc=c("center",
+"scale", "BoxCox"), trControl=trainControl)
+# GLMNET
+set.seed(7)
+fit.glmnet <- train(price~., data=dataset_uber, method="glmnet", metric=metric,
+preProc=c("center", "scale", "BoxCox"), trControl=trainControl)
+# SVM
+set.seed(7)
+fit.svm <- train(price~., data=dataset_uber, method="svmRadial", metric=metric,
+preProc=c("center", "scale", "BoxCox"), trControl=trainControl)
+# CART
+set.seed(7)
+grid <- expand.grid(.cp=c(0, 0.05, 0.1))
+fit.cart <- train(price~., data=dataset_uber, method="rpart", metric=metric, tuneGrid=grid,
+preProc=c("center", "scale", "BoxCox"), trControl=trainControl)
+# KNN
+set.seed(7)
+fit.knn <- train(price~., data=dataset_uber, method="knn", metric=metric, preProc=c("center",
+"scale", "BoxCox"), trControl=trainControl)
+# Compare algorithms
+transformResults <- resamples(list(LM=fit.lm, GLM=fit.glm, GLMNET=fit.glmnet, SVM=fit.svm,
+CART=fit.cart, KNN=fit.knn))
+summary(transformResults)
+dotplot(transformResults)
+```
+
+Improve Results With Tuning
+```{r}
+print(fit.cart)
+
+```
+
+
+```{r}
+# tune CART model
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "RMSE"
+set.seed(7)
+grid <- expand.grid(.cp=seq(0, 3, by=1))
+fit.cart <- train(price~., data=dataset_uber, method="rpart", metric=metric, tuneGrid=grid,
+preProc=c("BoxCox"), trControl=trainControl)
+print(fit.cart)
+plot(fit.cart)
+```
+
+## Ensemble Methods
+
+```{r}
+# try ensembles
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "RMSE"
+# Stochastic Gradient Boosting
+set.seed(7)
+fit.gbm <- train(price~., data=dataset_uber, method="gbm", metric=metric, preProc=c("BoxCox"),
+trControl=trainControl, verbose=FALSE)
+# Cubist
+set.seed(7)
+fit.cubist <- train(price~., data=dataset_uber, method="cubist", metric=metric,
+preProc=c("BoxCox"), trControl=trainControl)
+# Compare algorithms
+ensembleResults <- resamples(list(GBM=fit.gbm, CUBIST=fit.cubist))
+summary(ensembleResults)
+dotplot(ensembleResults)
+```
+
+
+
+```{r}
+# look at parameters used for Cubist
+print(fit.cubist)
+```
+
+```{r}
+# Tune the Cubist algorithm
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "RMSE"
+set.seed(7)
+grid <- expand.grid(.committees=seq(15, 25, by=1), .neighbors=c(0,5,9))
+tune.cubist <- train(price~., data=dataset_uber, method="cubist", metric=metric,
+preProc=c("BoxCox"), tuneGrid=grid, trControl=trainControl)
+print(tune.cubist)
+plot(tune.cubist)
+
+```
+
+## Finalize Model
+
+```{r}
+# prepare the data transform using training data
+library(Cubist)
+set.seed(7)
+x <- dataset_uber[,1:48]
+y <- dataset_uber[,49]
+preprocessParams <- preProcess(x, method=c("BoxCox"))
+transX <- predict(preprocessParams, x)
+# train the final model
+finalModel <- cubist(x=transX, y=y, committees=24)
+summary(finalModel)
+
+```
+
+Bring all the categorical data to the numeric format using label encoding.
+```{r}
+dmy <- dummyVars(" ~ .", data = validation_uber, fullRank = T)
+validation_uber <- data.frame(predict(dmy, newdata = validation_uber))
+
+glimpse(dataset_uber)
+```
+
+```{r}
+# transform the validation dataset
+set.seed(7)
+valX <- validation_uber[,1:48]
+trans_valX <- predict(preprocessParams, valX)
+valY <- validation_uber[,49]
+# use final model to make predictions on the validation dataset
+predictions <- predict(finalModel, newdata=trans_valX, neighbors=0)
+# calculate RMSE
+rmse <- RMSE(predictions, valY)
+r2 <- R2(predictions, valY)
+print(rmse)
+print(r2)
+```
+

@@ -1,0 +1,760 @@
+---
+title: "rideshare"
+author: "Diana Dent"
+date: "2022-09-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# ML project in R "Uber and Lyft price prediction"
+
+## Import dataset
+### Load packages
+
+```{r }
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(car)
+library(ggthemes)
+library(lubridate)
+```
+
+### Load the dataset
+```{r}
+ride <- read_csv("rideshare_kaggle.csv")
+head(ride)
+
+# Find the column names
+#pec(ride)
+
+```
+
+## Data preparation
+
+```{r}
+# list types for each attribute
+sapply(ride, class)
+dim(ride)
+unique(ride$day)
+```
+
+### Dealing with missing values
+```{r}
+anyNA(ride)
+colSums(is.na(ride))
+```
+
+```{r}
+#Dealing with missing values
+ride <- na.omit(ride)
+#re-check any missing value
+anyNA(ride)
+#summary(ride)
+```
+### Create/rename features - hour, weekday, product
+
+Next, we notice that the date columns contain some composite information such as day, day of the week, month, and time. Extracting them gives us more granular information to explore.
+
+```{r}
+#Add weekday column
+ride$datetime_<-as.POSIXct(ride$timestamp, tz="US/Eastern",origin="1970-01-01")
+ride$hour<-factor(hour(ride$datetime_))
+ride$weekday<-factor(weekdays(ride$datetime_))
+ride$hour <- as.numeric(ride$hour)
+#head(ride)
+```
+
+Change product names by Uber and Lyft, making them user friendly 
+
+```{r}
+# Rename variables by product name in a column "name"
+
+# For Uber
+ride$name[ride$name=="UberPool"]<-"Uber Pool"
+ride$name[ride$name=="UberX"]<-"Uber X"
+ride$name[ride$name=="UberXL"]<-"Uber XL"
+ride$name[ride$name=="WAV"]<-"Uber WAV"
+ride$name[ride$name=="Black SUV"]<-"Uber Black SUV"
+ride$name[ride$name=="Black"]<-"Uber Black"
+
+# For Lyft
+ride$name[ride$name=="Shared"]<-"Lyft Shared"
+ride$name[ride$name=="Lux Black"]<-"Lyft Lux Black"
+ride$name[ride$name=="Lux Black XL"]<-"Lyft Lux Black XL"
+ride$name[ride$name=="Lux"]<-"Lyft Lux"
+ride[, 12, drop=FALSE]
+
+```
+
+```{r}
+#Rename a column "name" to "product"
+#unique(ride[c("name")])
+colnames(ride)[colnames(ride) == "name"] ="product"
+unique(ride[c("product")])
+```
+
+
+
+```{r}
+# Create a new column "product_plot" for a plot "Price comparison by products"
+ride$product_plot<-ride$product
+
+ride$product_plot[ride$product_plot=="Lyft Shared"]<-"Shared"
+ride$product_plot[ride$product_plot=="Uber Pool"]<-"Shared"
+
+ride$product_plot[ride$product_plot=="Uber X"]<-"Regular"
+ride$product_plot[ride$product_plot=="Lyft"]<-"Regular"
+
+ride$product_plot[ride$product_plot=="Uber XL"]<-"SUV"
+ride$product_plot[ride$product_plot=="Lyft XL"]<-"SUV"
+
+ride$product_plot[ride$product_plot=="Uber Black"]<-"Lux"
+ride$product_plot[ride$product_plot=="Lyft Lux Black"]<-"Lux"
+
+ride$product_plot[ride$product_plot=="Uber Black SUV"]<-"Lux SUV"
+ride$product_plot[ride$product_plot=="Lyft Lux Black XL"]<-"Lux SUV"
+
+unique(ride[c("product_plot")])
+#ride[, 60, drop=FALSE]
+
+```
+
+
+```{r}
+#head(ride)
+#summary(ride)
+#str(ride)
+```
+
+There are 637976 rides. The analyzed period of the cab rides are only for the part of the November and December of 2018 year. The average prices for ride is 16.55. The average distance is 2.189. The average temperature is 39.58 F.
+
+### Removing Unnecessary Features
+
+We can see that 'timezone' feature has only one value. Also, 'product_id' feature contains many unidentified values. So we drop them. We remove 'id', 'datetime', 'datetime_' variables. 
+The Surge multiplier feature is almost constant across samples (near-zero variance predictor).
+
+```{r}
+ride <- subset(ride, select = -c(2,6,7,11,16,17,19,23,26,27,29:36, 38:58))
+head(ride)
+#summary(ride)
+```
+
+```{r}
+#head(ride)
+summary(ride)
+```
+## Create Lyft and Uber datasets
+```{r}
+#Create df Uber
+uber <- ride[ride$cab_type == 'Uber',]
+#head(uber)
+#summary(uber)
+```
+
+```{r}
+#Create df Lyft
+lyft <- ride[ride$cab_type == 'Lyft',]
+#head(uber)
+#summary(uber)
+dim(lyft)
+```
+
+```{r}
+dim(ride)
+```
+
+Create a dataset with numerical variables only
+```{r}
+ride_num<-ride %>% select(hour,day, month, price, distance, surge_multiplier, temperature,precipIntensity, humidity, windSpeed, visibility)
+ 
+```
+
+```{r}
+#head(ride)
+#summary(ride)
+str(ride_num)
+```
+
+Data Visualizations
+https://rstudio-pubs-static.s3.amazonaws.com/285012_aca1535265c24407bf17e05741936f7f.html
+```{r}
+# Multiple plot function
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  plots <- c(list(...), plotlist)
+  numPlots = length(plots)
+
+  if (is.null(layout)) {
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    for (i in 1:numPlots) {
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
+```{r}
+myplots <- list()  # new empty list
+for(i in 1:ncol(ride_num)){
+  col <- names(ride_num)[i]
+  ggp <- ggplot(ride_num, aes_string(x = col)) +
+    geom_histogram(bins = 30, fill = "cornflowerblue", color = "black") +
+    geom_vline(xintercept = mean(ride_num[[col]]), col = "red", lwd=1.5) 
+  myplots[[i]] <- ggp  # add each plot into plot list
+}
+
+multiplot(plotlist = myplots, cols = 3)
+```
+
+### The correlation between all attributes
+
+The correlation matrix provides us with another useful summary graphic that can help us to select features based on their respective linear correlations 
+
+```{r}
+library(ggcorrplot)
+cor(ride_num)
+corr_ride_1 <- round(cor(ride_num), 1)
+options(repr.plot.width = 100, repr.plot.height = 100)
+ggcorrplot(corr_ride_1,
+           type = "lower",
+           lab = TRUE, 
+           lab_size = 1.1,  
+           colors = c("tomato2", "white", "springgreen3"),
+           title="Correlogram of Dataset", 
+           ggtheme=theme_bw, tl.col="black", tl.cex=5, tl.srt=50)
+```
+
+
+##Scatterplots
+```{r}
+#str(ride)
+```
+
+```{r}
+# Uber VS Lyft: Price Comparison on Distances
+g1<-ggplot(ride,aes(distance,price,color=cab_type))+geom_point()+scale_x_continuous(name="Distance")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Distances")+theme_bw()
+g1
+```
+
+
+```{r}
+# Uber VS Lyft: Price Comparison on Hour
+g2<-ggplot(ride,aes(hour,price,color=cab_type))+geom_point()+scale_x_continuous(name="Hour")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Hour")+theme_bw()
+g2
+```
+
+
+```{r}
+# Uber VS Lyft: Price Comparison on Day of Months
+g3<-ggplot(ride,aes(day,price,color=cab_type))+geom_point()+scale_x_continuous(name="Day")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Day of the Months")+theme_bw()
+g3
+```
+
+```{r}
+# Uber VS Lyft: Price Comparison on Surge_multiplier
+g4<-ggplot(ride,aes(surge_multiplier,price,color=cab_type))+geom_point()+scale_x_continuous(name="Surge-multiplier")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Surge Multiplier")+theme_bw()
+g4
+```
+
+
+```{r}
+# Uber VS Lyft: Price Comparison on PrecipIntensity
+g5<-ggplot(ride,aes(precipIntensity,price,color=cab_type))+geom_point()+scale_x_continuous(name="PrecipIntensity")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Precipatation Intensity")+theme_bw()
+g5
+```
+
+```{r}
+# Uber VS Lyft: Price Comparison on Temperature
+g6<-ggplot(ride,aes(temperature,price,color=cab_type))+geom_point()+scale_x_continuous(name="Temperature")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Temperature")+theme_bw()
+g6
+```
+
+
+```{r }
+# Uber VS Lyft: Price Comparison on humidity
+g7<-ggplot(ride,aes(humidity,price,color=cab_type))+geom_point()+scale_x_continuous(name="Humidity")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Humidity")+theme_bw()
+g7
+
+
+```
+
+### Scatterplot Price vs windSpeed
+```{r }
+g8<-ggplot(ride,aes(windSpeed,price,color=cab_type))+geom_point()+scale_x_continuous(name="Wind Speed")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Wind Speed")+theme_bw()
+g8
+```
+
+### Scatterplot Price vs visibility
+```{r }
+g9<-ggplot(ride,aes(visibility,price,color=cab_type))+geom_point()+scale_x_continuous(name="Visibility")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Price Comparison on Visibility")+theme_bw()
+g9
+```
+
+
+### Scatterplot Surge Multiplier vs Hour
+```{r }
+g10<-ggplot(ride,aes(surge_multiplier,hour,color=cab_type))+geom_point()+scale_x_continuous(name="Surge multiplier")+ scale_color_manual(values=c("#ea0b8c", "black"), name = " ")+ggtitle("Uber VS Lyft: Surge Multiplier Comparison on Hour")+theme_bw()
+g10
+```
+
+
+### Distribution of Weather
+```{r}
+ggplot(ride,aes(cab_type))+geom_bar(aes(fill=short_summary))+
+    labs( x = "Cab type",fill="Weather - short summary")+
+  theme_bw()
+```
+
+### Distribution of Weather
+
+```{r}
+ride %>% group_by(icon) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100) 
+```
+
+```{r}
+ride %>% group_by(short_summary) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100) 
+```
+
+
+
+
+```{r}
+ggplot(ride,aes(cab_type))+geom_bar(aes(fill=icon))+
+    labs( x = "Cab type",fill="Weather - icon")+
+  theme_bw()
+```
+
+### Distribution of Weekday
+```{r}
+ggplot(ride,aes(cab_type))+geom_bar(aes(fill=weekday))+
+    labs( x = "Cab Type",fill="Weekday")+
+  theme_bw()
+```
+
+### Distribution of Product
+```{r}
+ggplot(ride,aes(cab_type))+geom_bar(aes(fill=product_plot))+
+    labs( x = "Cab Type",fill="Product")+
+  theme_bw()
+```
+### Distribution of Source
+```{r}
+ggplot(ride,aes(cab_type))+geom_bar(aes(fill=source))+
+    labs( x = "Cab Type",fill="Source")+
+  theme_bw()
+```
+### Distribution of Destinations
+```{r}
+ggplot(ride,aes(cab_type))+geom_bar(aes(fill=destination))+
+    labs( x = "Cab Type",fill="Destanation")+
+  theme_bw()
+```
+
+### Distribution of Uber & Lyft rides
+```{r }
+ride %>% group_by(cab_type) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100)
+```
+
+In this dataset Uber has more rides than Lyft. 51.82 percent of rides was for Uber.  48.18% was for Lyft.
+So for our whole data, we have uber data more than lyft data. The difference is not too big, each cab type has about 300K data.
+
+Plot of distribution Uber & Lyft rides
+```{r }
+  ggplot(ride, aes(cab_type, fill=cab_type)) + 
+  scale_fill_manual(values = c("magenta","black"))+
+    geom_bar() +
+    labs(x="Uber & Lyft", title="Distribution of Uber & Lyft rides")
+  
+```
+
+
+```{r}
+#Plot boxplot for the dataset
+par(mfrow=c(2, 5))  
+boxplot(ride$day, main="Day")
+boxplot(ride$month, main="Month")
+boxplot(ride$price, main="Price")
+boxplot(ride$distance, main="Distance")
+boxplot(ride$temperature, main="Temperature")
+boxplot(ride$precipIntensity, main="PrecipIntecity")
+boxplot(ride$humidity, main="Humidity")
+boxplot(ride$windSpeed, main="Wind Speed")
+boxplot(ride$visibility, main="Visibility")
+
+
+
+```
+
+
+```{r}
+#Plot boxplot for Uber dataset
+par(mfrow=c(2, 5))  
+boxplot(uber$day, main="Day")
+boxplot(uber$month, main="Month")
+boxplot(uber$price, main="Price")
+boxplot(uber$distance, main="Distance")
+boxplot(uber$temperature, main="Temperature")
+boxplot(uber$precipIntensity, main="PrecipIntecity")
+boxplot(uber$humidity, main="Humidity")
+boxplot(uber$windSpeed, main="Wind Speed")
+boxplot(uber$visibility, main="Visibility")
+
+
+
+```
+
+
+```{r}
+#Plot boxplot for Lyft
+par(mfrow=c(2, 5)) 
+boxplot(lyft$day, main="Day")
+boxplot(lyft$month, main="Month")
+boxplot(lyft$price, main="Price")
+boxplot(lyft$distance, main="Distance")
+boxplot(lyft$temperature, main="Temperature")
+boxplot(lyft$precipIntensity, main="PrecipIntecity")
+boxplot(lyft$humidity, main="Humidity")
+boxplot(lyft$windSpeed, main="Wind Speed")
+boxplot(lyft$visibility, main="Visibility")
+
+
+
+```
+
+## By month
+It appears that we only have november and december in our month data. It means the data is only recorded or taken in november and december with december data dominating.
+
+### Distribition of the cab rides by the time of the day
+It seems we have almost 24 hours recorded data
+```{r }
+ride %>% group_by(hour) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100)
+
+ride %>%
+    ggplot(aes(hour, fill=cab_type)) + 
+    labs(x="Hour", title="Cab rides by hour of the day") + 
+  scale_fill_manual(values = c("magenta","black"))+ geom_bar()
+
+```
+
+### Distribution of cab rides by days
+
+It seems we have many gaps in our 'day' data. For example we don't have data from 18th day until 25th day in each month
+```{r }
+ride %>% group_by(day) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100)
+```
+
+```{r }
+s_day <- ride %>% group_by(day) %>% dplyr::summarise(n = n())
+
+ggplot(s_day, aes(reorder(day, -n), n)) + geom_bar(stat = "identity") + geom_text(aes(label=n), vjust=0.5)  + ggtitle("Distribution of cab rides by days of the month")  + 
+  scale_fill_manual(values = c("magenta","black"))
+
+ride %>%
+    ggplot(aes(day, fill=cab_type)) +
+    labs(x="Day", title="Cab rides by day") + 
+  scale_fill_manual(values = c("magenta","black"))+
+    geom_bar()
+```
+
+### Distribution of cab rides by days of week
+
+So in every day and every hour recorded, uber seems dominating booking order in our data - plot with Uber and Lyft separately
+
+```{r }
+ride %>% group_by(weekday) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100)
+```
+
+```{r }
+w_day <- ride %>% group_by(weekday) %>% dplyr::summarise(n = n())
+
+ggplot(w_day, aes(reorder(weekday, -n), n)) + geom_bar(stat = "identity") + geom_text(aes(label=n), vjust=0.5)  + ggtitle("Distribution of cab rides by days of week")  + 
+  scale_fill_manual(values = c("magenta","black"))
+
+ride %>%
+    ggplot(aes(weekday, fill=cab_type)) +
+    labs(x="Day of Week", title="Cab rides by weekday") + 
+  scale_fill_manual(values = c("magenta","black"))+
+    geom_bar()
+```
+
+
+# Most popular sources / destinations 
+```{r}
+ride %>% group_by(source) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100) 
+```
+
+```{r}
+ride %>% group_by(destination) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100) 
+```
+The number of rides is slightly different between sources and destinations. All cab pickup points had above 8 percent of the total rides.
+It seems that all sources are almost equal in number. There are about 50k data in each source feature (Back Bay, Beacon Hill, Boston University, etc
+Same with source feature, there are about 50k data in each destination feature (Back Bay, Beacon Hill, Boston University, etc)
+
+
+## Which cabs by "product" the passengers favored to use?
+## Price Comparison on Comparable Products between Uber and Lyft
+## Distribition of the cab rides by the product
+```{r }
+ride %>% group_by(product) %>% 
+    dplyr::summarise(count = length(id),
+              'perc' = (length(id) / nrow(ride)) * 100)
+
+ride %>%
+    ggplot(aes(product, fill=cab_type)) +
+    labs(x="Product", title="Cab rides by product") + 
+  scale_fill_manual(values = c("magenta","black"))+
+    geom_bar()  + coord_flip()
+
+```
+
+##During what kind of weather "long_summary" the passengers favored to use cabs? 
+## Wordcloud
+```{r}
+library("tm")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+docs <- Corpus(VectorSource(ride$long_summary))
+# Convert the text to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+# Remove english common stopwords
+docs <- tm_map(docs, removeWords, stopwords("english"))
+# Remove your own stop word
+# specify your stopwords as a character vector
+docs <- tm_map(docs, removeWords, c("and", "throughout", "again", "until", "starting", "the", "mostly", "possible")) 
+# Remove punctuation
+docs <- tm_map(docs, removePunctuation)
+m <- as.matrix(TermDocumentMatrix(docs))
+v <- sort(rowSums(m), decreasing = TRUE)
+words <- data.frame(word = names(v), freq = v)
+set.seed(1234)
+wordcloud(words$word, freq = words$freq, colors = brewer.pal(8, "Dark2"))
+```
+
+## During what kind of weather the passengers favored to use cabs - by "short_summary" and "icon"?
+```{r}
+#library(ggplot2)
+
+s_icon <- ride %>% group_by(icon) %>% dplyr::summarise(n = n())
+s_short_summary <- ride %>% group_by(short_summary) %>% dplyr::summarise(n = n())
+
+ggplot(s_icon, aes(reorder(icon, -n), n)) + geom_bar(stat = "identity") + geom_text(aes(label=n), vjust=1.5) +  ggtitle("Frequent weather 'icon' to use cabs")+ coord_flip()
+
+#ggplot(s_short_summary, aes(reorder(short_summary, -n), n)) + geom_bar(stat = "identity") + geom_text(aes(label=n), vjust=1.5) + geom_text(aes(label=short_summary), vjust=4, colour = "black", size = 2) + ggtitle("Frequent weather 'short_summary' to use cabs") + coord_flip()
+
+ggplot(s_short_summary, aes(reorder(short_summary, -n), n)) + geom_bar(stat = "identity") + geom_text(aes(label=n), vjust=1)  + ggtitle("Frequent weather 'short_summary' to use cabs") + coord_flip()
+
+```
+# Temperature
+```{r}
+summary(ride$temperature)
+
+hist(ride$temperature, col = "blue", density = 50, angle = 135, breaks = 20, xlim = c(0,80), main = "Histogram of temperature")
+
+boxplot(ride$temperature, horizontal = TRUE)
+```
+
+# precipIntensity
+```{r}
+summary(ride$precipIntensity)
+
+hist(ride$precipIntensity, col = "blue", density = 50, angle = 135, breaks = 10, xlim = c(0,.3), main = "Histogram of precipIntensity")
+
+boxplot(ride$precipIntensity, horizontal = TRUE)
+```
+
+# humidity
+```{r}
+summary(ride$humidity)
+
+hist(ride$humidity, col = "blue", density = 50, angle = 135, breaks = 10, xlim = c(0,1), main = "Histogram of humidity")
+
+boxplot(ride$humidity, horizontal = TRUE)
+```
+
+#windSpeed
+```{r}
+summary(ride$windSpeed)
+
+hist(ride$windSpeed, col = "blue", density = 50, angle = 135, breaks = 20, xlim = c(0,15), main = "Histogram of windSpeed")
+
+boxplot(ride$windSpeed, horizontal = TRUE)
+```
+#visibility
+```{r}
+summary(ride$visibility)
+
+hist(ride$visibility, col = "blue", density = 50, angle = 135, breaks = 20, xlim = c(0,10), main = "Histogram of visibility")
+
+boxplot(ride$visibility, horizontal = TRUE)
+```
+
+# surge_multiplier
+```{r}
+summary(ride$surge_multiplier)
+
+hist(ride$surge_multiplier, col = "blue", density = 50, angle = 135, breaks = 20, xlim = c(0,3), main = "Histogram of surge_multiplier")
+
+boxplot(ride$surge_multiplier, horizontal = TRUE)
+```
+
+# Distance
+```{r}
+summary(ride$distance)
+
+hist(ride$distance, col = "blue", density = 50, angle = 135, breaks = 20, xlim = c(0,10), main = "Histogram of distance")
+
+boxplot(ride$distance, horizontal = TRUE)
+```
+#hour
+```{r}
+summary(ride$hour)
+
+hist(ride$hour, col = "blue", density = 50, angle = 135, breaks = 20, xlim = c(0,25), main = "Histogram of hour")
+
+boxplot(ride$hour, horizontal = TRUE)
+```
+
+# hour
+```{r}
+library(treemap)
+library(highcharter)
+ride %>% group_by(hour) %>% dplyr::summarise(n = n()) %>% arrange(desc(n)) %>% hchart(type = "treemap", hcaes(name = hour, x = hour, value = n, color = n, label=value))
+
+```
+
+
+## EDA of Price
+##Price
+
+
+```{r}
+summary(ride$price)
+
+hist(ride$price, col = "blue", density = 50, angle = 135, breaks = 30, xlim = c(0,100), main = "Histogram of price")
+
+boxplot(ride$price, horizontal = TRUE)
+```
+# price range
+```{r}
+
+summary(lyft$price)
+summary(uber$price)
+hist(uber$price, col = "black", density = 50, angle = 135, breaks = 40, xlim = c(0,80), main = "Histogram of Uber & Lyft price")
+hist(lyft$price, col = "magenta", density = 50, add = TRUE, breaks = 40)
+boxplot(lyft$price, uber$price, horizontal = FALSE)
+```
+
+```{r}
+ggplot(ride,aes(product_plot,price,fill=cab_type))+geom_boxplot()+ scale_fill_manual(values=c("magenta", "black"), name = " ") +scale_x_discrete(name="Product")+scale_color_discrete(name="")+ggtitle("Uber VS Lyft: Price Comparison between similar products")+theme_bw()
+```
+
+```{r}
+#Price per Day
+#Scatter plot
+tapply(ride$price, ride$day, FUN=sum)
+barplot(tapply(ride$price, ride$day, FUN=sum),xlab = "Days",ylab="Count",
+        main = "Price of Cabs over Days", col = "blue")
+
+```
+
+```{r}
+#Price per Day
+#scatter plot
+ggplot(data = ride, aes(x=day, fill =
+    ride$price))+geom_bar(fill = 'blue', size=2) +
+  labs(y='Count', x='Days', title = 'Price of cabs per day')
+
+```
+
+
+```{r}
+#Price per Hour
+tapply(ride$price, ride$hour, FUN=sum)
+barplot(tapply(ride$price, ride$hour, FUN=sum),xlab = "Hour",ylab="Price",
+        main = "Price over Hours", col = "blue")
+```
+
+```{r}
+#Surge_Multiplier over Days
+
+tapply(ride$surge_multiplier, ride$day, FUN=mean)
+
+barplot(tapply(ride$surge_multiplier, ride$day, FUN=sum),xlab = "Days",
+        ylab="Surge_Multiplier",main = "Surges over Days", col = "blue")
+
+
+
+```
+
+```{r}
+#Surge_Multiplier over hours
+tapply(ride$surge_multiplier, ride$hour, FUN=mean)
+
+barplot(tapply(ride$surge_multiplier, ride$hour, FUN=sum),xlab = "Hours",
+        ylab="Surge_Multiplier",main = "Surges over Hours", col = "blue")
+
+
+
+```
+
+
+```{r}
+#Price over Distance
+tapply(ride$price, ride$distance, FUN=mean)
+plot(tapply(ride$price, ride$distance, FUN=mean),xlab = "Distance",ylab="Price",
+     main = "Price over Increasing Distance", col="blue")
+```
+
+
+```{r}
+#pricepIntens over days
+table(ride$precipIntensity)
+tapply(ride$precipIntensity, ride$day, FUN=sum)
+barplot(tapply(ride$precipIntensity, ride$day, FUN=sum),xlab = "Days",ylab="precipIntensity",
+        main = "precipIntensity over Days", col="blue")
+```
+
+
+```{r}
+#visibility vs Price 
+#(We can see an increase in price with increase in clouds)
+ggplot(data = ride, aes(x = visibility, fill = price))+
+  geom_bar(color = "dark blue", size = 2)+labs(y="Count", x= "visibility",title="visibility Vs Price")
+```
